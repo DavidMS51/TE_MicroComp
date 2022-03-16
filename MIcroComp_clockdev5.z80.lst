@@ -1,0 +1,366 @@
+0000                             ; MicroComp Clock
+0000                             ; David Saul 2022
+0000                             ; 
+0000                             ; Coded for MicroComp - will notwork with dev system
+0000                             ; 
+0000                             ; No RAM basted storage.This means not Call / Ret Commands etc
+0000                             ; 
+0000                             ; Importantly this code uses a the I register for flags - so don't try to use interrupts
+0000                             ; 
+0000                             ; So in general there as some bad things done with the code to avoid the need for RAM !
+0000                             ; 
+0000                STACK:    EQU   $ffff   ; top of CPU Board RAM
+0000                MBASE:    EQU   $0000   ; MicroComp Mem base
+0000                DIL:      EQU   $01   ; port DIL switches are connectect to
+0000                MDISP:    EQU   $02   ; port onboard MicroComp dislay is connected to
+0000                DISP:     EQU   $04   ; port clock mux display is connected to
+0000                          .ORG   MBASE   
+0000                             ;Start
+0000                             ;Setup
+0000                             ; 
+0000                             ; 
+0000                             ; 24 hour clock format assumed
+0000                             ; B = 10s hours , hours
+0000                             ; C = 10s minutes, minutes
+0000                             ; D = 10s seconds, Seconds
+0000                             ; E = day of the week   [future]
+0000                             ; times are stored as BCD numbers
+0000   01 55 23               LD   BC,$2355   ; initial set of digit store regs
+0003   11 00 46               LD   DE,$4600   
+0006   FD 21 1E 01            LD   IY,del   ; as we only have one sub-routine we only need to do this once
+000A                             ; 
+000A                             ; basic display mux code
+000A                             ; 
+000A                MLOOP:       
+000A   7A                     LD   A,D   ; get second data
+000B   E6 0F                  AND   $0f   ; mask 10s
+000D   D3 04                  OUT   (DISP),A   ; set dig 0
+000F   3E 05                  LD   A,$05   ;delay length
+0011   DD 21 17 00            LD   IX,r1   ; save return address
+0015   FD E9                  JP   (IY)   
+0017   7A           R1:       LD   A,D   ; re-fetch second data
+0018   E6 F0                  AND   $f0   ; mask 1s
+001A   CB 1F                  RR   A   ; shift it to low nibble
+001C   CB 1F                  RR   A   
+001E   CB 1F                  RR   A   
+0020   CB 1F                  RR   A   
+0022   F6 10                  OR   $10   ; select digit 1
+0024   D3 04                  OUT   (DISP),A   ; set dig 1
+0026   3E 05                  LD   A,$05   ;delay length
+0028   DD 21 2E 00            LD   IX,r2   
+002C   FD E9                  JP   (IY)   
+002E   3E 6F        R2:       LD   A,$6F   ; LS138 "6" is decoded for the "gap" digits (3 and 6 on the VFD)
+0030   D3 04                  OUT   (DISP),A   
+0032   3E 05                  LD   A,$05   ;delay length
+0034   DD 21 3A 00            LD   IX,r2a   
+0038   FD E9                  JP   (IY)   
+003A   79           R2A:      LD   A,C   ; get minute data
+003B   E6 0F                  AND   $0F   ; mask 10m
+003D   F6 20                  OR   $20   ; select digit 2
+003F   D3 04                  OUT   (DISP),A   ; set dig 2
+0041   3E 05                  LD   A,$05   ;delay length
+0043   DD 21 49 00            LD   IX,r3   
+0047   FD E9                  JP   (IY)   
+0049   79           R3:       LD   A,C   ; re fetch minute data
+004A   E6 F0                  AND   $f0   ; mask 1m
+004C   CB 1F                  RR   A   ; shift it to low nibble
+004E   CB 1F                  RR   A   
+0050   CB 1F                  RR   A   
+0052   CB 1F                  RR   A   
+0054   F6 30                  OR   $30   ; select digit 3
+0056   D3 04                  OUT   (DISP),A   ; set dig 3
+0058   3E 05                  LD   A,$05   ;delay length
+005A   DD 21 60 00            LD   IX,r4   
+005E   FD E9                  JP   (IY)   
+0060   3E 6F        R4:       LD   A,$6F   ; LS138  "6" is decoded for the "gap" digits (3 and 6 on the VFD)
+0062   D3 04                  OUT   (DISP),A   
+0064   3E 05                  LD   A,$05   ;delay length
+0066   DD 21 6C 00            LD   IX,r4a   
+006A   FD E9                  JP   (IY)   
+006C   78           R4A:      LD   A,B   ; fetch hour data
+006D   E6 0F                  AND   $0f   ; mask 10h
+006F   F6 40                  OR   $40   ; select digit 4
+0071   D3 04                  OUT   (DISP),A   ; set dig 4
+0073   3E 05                  LD   A,$05   ;delay length
+0075   DD 21 7B 00            LD   IX,r5   
+0079   FD E9                  JP   (IY)   
+007B   78           R5:       LD   A,B   ; re fetch hour data
+007C   E6 F0                  AND   $f0   ; mask 1h
+007E   CB 1F                  RR   A   ; shift to lower nibble
+0080   CB 1F                  RR   A   
+0082   CB 1F                  RR   A   
+0084   CB 1F                  RR   A   
+0086   F6 50                  OR   $50   ; select digit 5
+0088   D3 04                  OUT   (DISP),A   ; set dig 5
+008A                             ; 
+008A                             ; time count and update code
+008A                             ; 
+008A                R6:          
+008A                             ; definitions
+008A                             ; bit 0 active = time set mode
+008A                             ; bit 5 tick input (1 per second) - ideally short active going pulse
+008A                             ; bit 8 active hour set clear minute set
+008A                             ; bit 7 incruement hour / min as selected
+008A                             ; test for clock set mode first
+008A   DB 01                  IN   A,(DIL)   
+008C   CB 47                  BIT   0,A   
+008E   28 07                  JR   Z,tick   ; no cont tick check
+0090   3E 6D                  LD   A,$6D   ; yes, displat "S" and
+0092   D3 02                  OUT   (MDISP),A   
+0094   C3 23 01               JP   ckset   ; skip tick check and jump to time update code
+0097                TICK:        
+0097                             ; test for tick
+0097   CB 6F                  BIT   5,A   
+0099   28 0C                  JR   Z,t2   ; no then skip
+009B                             ; flag pulse detected
+009B                             ; but is it new ?
+009B   ED 57                  LD   A,I   
+009D   CB 7F                  BIT   7,A   
+009F   20 0C                  JR   NZ,t5   ; already counted so skip update
+00A1                             ; yes new so flag by setting bit 7 of I to $1
+00A1   CB FF                  SET   7,A   
+00A3   ED 47                  LD   I,A   
+00A5   18 15                  JR   t3   ; go on with time incruement
+00A7   ED 57        T2:       LD   A,I   ; clear pulse detect flag
+00A9   CB BF                  RES   7,A   
+00AB   ED 47                  LD   I,A   
+00AD                T5:          
+00AD                             ; add no update delay
+00AD   3E 03                  LD   A,$03   
+00AF   FD 21 1E 01            LD   IY,del   ; call delay
+00B3   DD 21 B9 00            LD   IX,t6   
+00B7   FD E9                  JP   (IY)   
+00B9   C3 12 01     T6:       JP   Cont   ; continue without updating
+00BC                             ; Update display
+00BC                T3:          
+00BC                             ; note display indicator code reomved as it did not add much now just flash a bars on 7 seg
+00BC                             ; display
+00BC   3E C0                  LD   A,$C0   
+00BE   D3 02                  OUT   (MDISP),A   ; this is currently just for fault finding
+00C0   CB BF                  RES   7,A   
+00C2   D3 02                  OUT   (MDISP),A   ; 
+00C4   00                     NOP      
+00C5   3E 00                  LD   A,00   
+00C7   D3 02                  OUT   (MDISP),A   ; blank board display so you just get quick flash
+00C9                             ; now do the time update
+00C9                             ; start with seconds
+00C9   7A                     LD   A,D   ; save temp copy of D
+00CA   E6 0F                  AND   $0F   ; mask high nibble
+00CC   14                     INC   D   ; inc second count
+00CD   3C                     INC   A   
+00CE   FE 0A                  CP   $0A   ; test for carry in lower nibble (10)
+00D0   20 40                  JR   NZ,cont   ; no - exit from update
+00D2                             ; yes - reset 1s and continue with update check
+00D2   3E F0                  LD   A,$F0   ; clear lower nubble in D
+00D4   A2                     AND   D   
+00D5   57                     LD   D,A   
+00D6                             ; now incrument 10sec count
+00D6   7A                     LD   A,D   ; re fetch second data
+00D7   E6 F0                  AND   $F0   ; mask lower nibble
+00D9   C6 10                  ADD   A,$10   ; inc 10 second count
+00DB   57                     LD   D,A   ; save it back to D
+00DC   E6 F0                  AND   $F0   ; clear lower nibble in A so we can test for carry
+00DE   FE 60                  CP   $60   ; test for carry (6)
+00E0   20 30                  JR   NZ,cont   ; no - exit from update
+00E2                             ; yes - reset 10s and continue with update check
+00E2   3E 0F                  LD   A,$0F   ; clear high nibble in D (result will be in A)
+00E4   A2                     AND   D   
+00E5   57                     LD   D,A   ; save result back to D
+00E6                             ; now do minutes
+00E6   79                     LD   A,C   ; save temp copy of C
+00E7   E6 0F                  AND   $0F   ; mask high nibble
+00E9   0C                     INC   C   ; inc minute count
+00EA   3C                     INC   A   
+00EB   FE 0A                  CP   $0A   ; test for carry in lower nibble (10)
+00ED   20 23                  JR   NZ,cont   ; no - exit from update
+00EF                             ; yes - reset 1min and continue with update check
+00EF   3E F0                  LD   A,$F0   ; clear lower nubble in B
+00F1   A1                     AND   C   
+00F2   4F                     LD   C,A   
+00F3                             ; now incrument 10sec count
+00F3   79                     LD   A,C   ; re fetch minute data
+00F4   E6 F0                  AND   $F0   ; mask lower nibble
+00F6   C6 10                  ADD   A,$10   ; inc 10 minute count
+00F8   4F                     LD   C,A   ; save it back to B
+00F9   E6 F0                  AND   $F0   ; clear lower nibble in A so we can test for carry
+00FB   FE 60                  CP   $60   ; test for carry (6)
+00FD   20 13                  JR   NZ,cont   ; no - exit from update
+00FF                             ; yes - reset 10m and continue with update check
+00FF   3E 0F                  LD   A,$0F   ; clear high nibble in B (result will be in A)
+0101   A1                     AND   C   
+0102   4F                     LD   C,A   ; save result back to B
+0103                             ; now do hours
+0103   78                     LD   A,B   ; save temp copy of B
+0104   E6 0F                  AND   $0F   ; mask high nibble
+0106   04                     INC   B   ; inc minute count
+0107   3C                     INC   A   
+0108   FE 0A                  CP   $0A   ; test for carry in lower nibble (10)
+010A   20 09                  JR   NZ,chk24   ; no - check for midnight
+010C                             ; yes - reset 1hr and inc 10hr
+010C   3E F0                  LD   A,$F0   ; clear lower nubble in B
+010E   A0                     AND   B   ; save result in A
+010F                             ; now incrument 10hour count
+010F   C6 10                  ADD   A,$10   ; inc 10 hour count
+0111   47                     LD   B,A   ; restore B
+0112                             ; no need to check for 10hr carry as will reset on 24 (dec)
+0112   C3 0A 00     CONT:     JP   MLOOP   
+0115                             ; check for midnight (24:00)
+0115   3E 24        CHK24:    LD   A,$24   
+0117   B8                     CP   B   
+0118   20 F8                  JR   NZ,cont   ; no exit from update
+011A                             ; reset to 00:00  - mins and sec will will aready be 00
+011A   06 00                  LD   B,00   ; clear hours
+011C   18 F4                  JR   cont   ; exit
+011E                             ; 
+011E                             ; routines
+011E                             ; 
+011E                             ; 8bit delay
+011E                             ; Loops count as per value passed in A
+011E                DEL:         
+011E   3D           DEL1:     DEC   A   
+011F   20 FD                  JR   NZ,del1   ; no loop again
+0121   DD E9                  JP   (IX)   
+0123                             ; 
+0123                             ; clock set routine
+0123                             ; 
+0123                CKSET:       
+0123   DB 01                  IN   A,(DIL)   ; get current switch status
+0125   CB 77                  BIT   6,A   ; check for inc push down
+0127   CA 0A 00               JP   Z,Mloop   ; no loop back to display routine
+012A   3E 5C        DB1:      LD   A,$5C   
+012C   D3 04                  OUT   (DISP),A   ; display something approximating to a u while push is held down
+012E   DB 01                  IN   A,(DIL)   ; wait for push to be released
+0130   CB 77                  BIT   6,A   
+0132   20 F6                  JR   NZ,db1   
+0134                             ; First clear seconds counter
+0134   16 00                  LD   D,$00   
+0136                             ;check for hour / min update
+0136   CB 7F                  BIT   7,A   ; test for minute / hour select
+0138   C2 5D 01               JP   NZ,hour   ; D0 down = hour set otherwise update minutes
+013B                             ;minute inc code
+013B   79                     LD   A,C   ; save temp copy of C
+013C   E6 0F                  AND   $0F   ; mask high nibble
+013E   0C                     INC   C   ; inc minute count
+013F   3C                     INC   A   
+0140   FE 0A                  CP   $0A   ; test for carry in lower nibble (10)
+0142   C2 0A 00               JP   NZ,Mloop   ; no - exit from update
+0145                             ; yes - reset 1s and continue with update check
+0145   3E F0                  LD   A,$F0   ; clear lower nubble in C
+0147   A1                     AND   C   
+0148   4F                     LD   C,A   
+0149                             ; now incrument 10min count
+0149   79                     LD   A,C   ; re fetch second data
+014A   E6 F0                  AND   $F0   ; mask lower nibble
+014C   C6 10                  ADD   A,$10   ; inc 10 min count
+014E   4F                     LD   C,A   ; save it back to C
+014F   E6 F0                  AND   $F0   ; clear lower nibble in A so we can test for carry
+0151   FE 60                  CP   $60   ; test for carry (6)
+0153   C2 0A 00               JP   NZ,mloop   ; no - exit from update
+0156                             ; yes - reset 10m and continue with update check
+0156   3E 0F                  LD   A,$0F   ; clear high nibble in C (result will be in A)
+0158   A1                     AND   C   
+0159   4F                     LD   C,A   ; save result back to C
+015A   C3 0A 00               JP   Mloop   ; loop back to display routine
+015D                             ;hour inc code
+015D                HOUR:        
+015D   78                     LD   A,B   ; save temp copy of B
+015E   E6 0F                  AND   $0F   ; mask high nibble
+0160   04                     INC   B   ; inc hour count
+0161   3C                     INC   A   
+0162   FE 0A                  CP   $0A   ; test for carry in lower nibble (10)
+0164   C2 70 01               JP   NZ,chk24a   ; no - check for midnight
+0167                             ; yes - reset 1hr and inc 10hr
+0167   3E F0                  LD   A,$F0   ; clear lower nubble in B
+0169   A0                     AND   B   ; save result in A
+016A                             ; now incrument 10hour count
+016A   C6 10                  ADD   A,$10   ; inc 10 hour count
+016C   47                     LD   B,A   ; restore B
+016D                             ; no need to check for 10hr carry as will reset on 24 (dec)
+016D   C3 0A 00               JP   Mloop   
+0170   3E 24        CHK24A:   LD   A,$24   
+0172   B8                     CP   B   
+0173   C2 0A 00               JP   NZ,Mloop   ; no exit from update
+0176                             ; reset to 00:00  - mins and sec will will aready be 00
+0176   06 00                  LD   B,00   ; clear hours
+0178   C3 0A 00               JP   Mloop   ; exit
+
+
+STACK:              FFFF DEFINED AT LINE 13
+MBASE:              0000 DEFINED AT LINE 14
+                    > USED AT LINE 20
+DIL:                0001 DEFINED AT LINE 16
+                    > USED AT LINE 124
+                    > USED AT LINE 281
+                    > USED AT LINE 289
+MDISP:              0002 DEFINED AT LINE 17
+                    > USED AT LINE 128
+                    > USED AT LINE 167
+                    > USED AT LINE 169
+                    > USED AT LINE 172
+DISP:               0004 DEFINED AT LINE 18
+                    > USED AT LINE 49
+                    > USED AT LINE 60
+                    > USED AT LINE 66
+                    > USED AT LINE 74
+                    > USED AT LINE 85
+                    > USED AT LINE 91
+                    > USED AT LINE 99
+                    > USED AT LINE 110
+                    > USED AT LINE 288
+MLOOP:              000A DEFINED AT LINE 45
+                    > USED AT LINE 254
+                    > USED AT LINE 284
+                    > USED AT LINE 307
+                    > USED AT LINE 323
+                    > USED AT LINE 330
+                    > USED AT LINE 352
+                    > USED AT LINE 356
+                    > USED AT LINE 360
+R1:                 0017 DEFINED AT LINE 53
+                    > USED AT LINE 51
+R2:                 002E DEFINED AT LINE 65
+                    > USED AT LINE 62
+R2A:                003A DEFINED AT LINE 71
+                    > USED AT LINE 68
+R3:                 0049 DEFINED AT LINE 78
+                    > USED AT LINE 76
+R4:                 0060 DEFINED AT LINE 90
+                    > USED AT LINE 87
+R4A:                006C DEFINED AT LINE 96
+                    > USED AT LINE 93
+R5:                 007B DEFINED AT LINE 103
+                    > USED AT LINE 101
+R6:                 008A DEFINED AT LINE 115
+TICK:               0097 DEFINED AT LINE 131
+                    > USED AT LINE 126
+T2:                 00A7 DEFINED AT LINE 146
+                    > USED AT LINE 134
+T5:                 00AD DEFINED AT LINE 150
+                    > USED AT LINE 139
+T6:                 00B9 DEFINED AT LINE 157
+                    > USED AT LINE 154
+T3:                 00BC DEFINED AT LINE 160
+                    > USED AT LINE 143
+CONT:               0112 DEFINED AT LINE 254
+                    > USED AT LINE 157
+                    > USED AT LINE 182
+                    > USED AT LINE 198
+                    > USED AT LINE 212
+                    > USED AT LINE 227
+                    > USED AT LINE 259
+                    > USED AT LINE 263
+CHK24:              0115 DEFINED AT LINE 257
+                    > USED AT LINE 242
+DEL:                011E DEFINED AT LINE 270
+                    > USED AT LINE 40
+                    > USED AT LINE 153
+DEL1:               011E DEFINED AT LINE 272
+                    > USED AT LINE 273
+CKSET:              0123 DEFINED AT LINE 279
+                    > USED AT LINE 129
+DB1:                012A DEFINED AT LINE 287
+                    > USED AT LINE 291
+HOUR:               015D DEFINED AT LINE 333
+                    > USED AT LINE 298
+CHK24A:             0170 DEFINED AT LINE 354
+                    > USED AT LINE 340

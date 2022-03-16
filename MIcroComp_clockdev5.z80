@@ -1,0 +1,361 @@
+; MicroComp Clock 
+
+; David Saul 2022
+;
+; Coded for MicroComp - will notwork with dev system
+;
+; No RAM basted storage.This means not Call / Ret Commands etc
+;
+; Importantly this code uses a the I register for flags - so don't try to use interrupts
+; 
+; So in general there as some bad things done with the code to avoid the need for RAM !
+;
+STACK       EQU     $ffff           ; top of CPU Board RAM
+MBASE       EQU     $0000           ; MicroComp Mem base
+
+DIL         EQU     $01             ; port DIL switches are connectect to
+MDISP       EQU     $02             ; port onboard MicroComp dislay is connected to
+DISP        EQU     $04             ; port clock mux display is connected to
+
+            ORG     MBASE
+            
+;Start
+
+
+;Setup
+;
+;
+; 24 hour clock format assumed
+; B = 10s hours , hours
+; C = 10s minutes, minutes
+; D = 10s seconds, Seconds
+; E = day of the week   [future]
+
+; times are stored as BCD numbers
+
+            
+            LD      BC,$2355        ; initial set of digit store regs
+            LD      DE,$4600
+            
+            LD      IY,del          ; as we only have one sub-routine we only need to do this once
+            
+;
+; basic display mux code
+;
+Mloop:
+
+            LD      A,D             ; get second data
+            AND     $0f             ; mask 10s
+            OUT     (DISP),A         ; set dig 0
+            LD      A,$05           ;delay length
+            LD      IX,r1           ; save return address
+            JP      (IY)
+r1          LD      A,D             ; re-fetch second data
+            AND     $f0             ; mask 1s
+            RR      A               ; shift it to low nibble
+            RR      A
+            RR      A
+            RR      A
+            OR      $10             ; select digit 1
+            OUT     (DISP),A         ; set dig 1
+            LD      A,$05           ;delay length
+            LD      IX,r2           
+            JP      (IY)
+            
+r2          LD      A,$6F           ; LS138 '6' is decoded for the 'gap' digits (3 and 6 on the VFD)
+            OUT     (DISP),A
+            LD      A,$05           ;delay length
+            LD      IX,r2a           
+            JP      (IY)
+            
+r2a         LD      A,C             ; get minute data
+            AND     $0F             ; mask 10m
+            OR      $20             ; select digit 2
+            OUT     (DISP),A         ; set dig 2
+            LD      A,$05           ;delay length
+            LD      IX,r3
+            JP      (IY)
+r3          LD      A,C             ; re fetch minute data
+            AND     $f0             ; mask 1m
+            RR      A               ; shift it to low nibble
+            RR      A
+            RR      A
+            RR      A
+            OR      $30             ; select digit 3
+            OUT     (DISP),A         ; set dig 3
+            LD      A,$05           ;delay length
+            LD      IX,r4
+            JP      (IY)
+            
+r4          LD      A,$6F           ; LS138  '6' is decoded for the 'gap' digits (3 and 6 on the VFD)
+            OUT     (DISP),A
+            LD      A,$05           ;delay length
+            LD      IX,r4a           
+            JP      (IY)            
+            
+r4a         LD      A,B             ; fetch hour data
+            AND     $0f             ; mask 10h
+            OR      $40             ; select digit 4
+            OUT     (DISP),A         ; set dig 4
+            LD      A,$05           ;delay length
+            LD      IX,r5
+            JP      (IY)
+r5          LD      A,B             ; re fetch hour data
+            AND     $f0             ; mask 1h
+            RR      A               ; shift to lower nibble
+            RR      A
+            RR      A
+            RR      A
+            OR      $50             ; select digit 5
+            OUT     (DISP),A         ; set dig 5
+
+;
+; time count and update code
+;
+r6:  
+; definitions 
+; bit 0 active = time set mode
+; bit 5 tick input (1 per second) - ideally short active going pulse
+; bit 8 active hour set clear minute set
+; bit 7 incruement hour / min as selected
+
+; test for clock set mode first
+
+            IN      A,(DIL)
+            BIT     0,A
+            JR      Z,tick          ; no cont tick check 
+            LD      A,$6D           ; yes, displat 'S' and
+            OUT     (MDISP),A
+            JP      ckset           ; skip tick check and jump to time update code
+
+tick:
+; test for tick                      
+            BIT     5,A
+            JR      Z,t2            ; no then skip
+                                    ; flag pulse detected
+                                    ; but is it new ?
+            LD      A,I
+            BIT     7,A
+            JR      NZ,t5         ; already counted so skip update
+                                    ; yes new so flag by setting bit 7 of I to $1
+            SET     7,A           
+            LD      I,A
+            JR      t3              ; go on with time incruement
+            
+            
+t2          LD      A,I           ; clear pulse detect flag
+            RES     7,A
+            LD      I,A
+            
+t5:
+; add no update delay
+            LD      A,$03
+            LD      IY,del          ; call delay
+            LD      IX,t6
+            JP      (IY)
+
+t6          JP      Cont            ; continue without updating
+
+; Update display
+t3:
+                                ; note display indicator code reomved as it did not add much now just flash a bars on 7 seg
+                                ; display
+                                
+
+
+            LD      A,$C0
+            OUT     (MDISP),A   ; this is currently just for fault finding
+            RES      7,A
+            OUT     (MDISP),A   ;
+            NOP
+            LD      A,00
+            OUT     (MDISP),A   ; blank board display so you just get quick flash
+            
+; now do the time update
+                                ; start with seconds
+            LD      A,D         ; save temp copy of D         
+            AND     $0F         ; mask high nibble
+            
+            INC     D           ; inc second count
+            INC     A
+            CP      $0A         ; test for carry in lower nibble (10)
+            JR      NZ,cont     ; no - exit from update
+            
+                                ; yes - reset 1s and continue with update check
+            
+            LD      A,$F0       ; clear lower nubble in D
+            AND     D
+            LD      D,A
+                                ; now incrument 10sec count
+                                
+            LD      A,D         ; re fetch second data
+            AND     $F0         ; mask lower nibble
+            ADD     A,$10       ; inc 10 second count
+            LD      D,A         ; save it back to D
+            AND     $F0         ; clear lower nibble in A so we can test for carry
+            CP      $60         ; test for carry (6)
+            
+            JR      NZ,cont     ; no - exit from update
+            
+                                ; yes - reset 10s and continue with update check
+            LD      A, $0F      ; clear high nibble in D (result will be in A)
+            AND     D           
+            LD      D,A         ; save result back to D
+            
+                                ; now do minutes
+            LD      A,C         ; save temp copy of C         
+            AND     $0F         ; mask high nibble
+            
+            INC     C           ; inc minute count
+            INC     A
+            CP      $0A         ; test for carry in lower nibble (10)
+            JR      NZ,cont     ; no - exit from update
+            
+                                ; yes - reset 1min and continue with update check
+            
+            LD      A,$F0       ; clear lower nubble in B
+            AND     C
+            LD      C,A
+                                ; now incrument 10sec count
+                                
+            LD      A,C         ; re fetch minute data
+            AND     $F0         ; mask lower nibble
+            ADD     A,$10       ; inc 10 minute count
+            LD      C,A         ; save it back to B
+            AND     $F0         ; clear lower nibble in A so we can test for carry
+            CP      $60         ; test for carry (6)
+            JR      NZ,cont     ; no - exit from update
+            
+                                ; yes - reset 10m and continue with update check
+            LD      A, $0F      ; clear high nibble in B (result will be in A)
+            AND     C           
+            LD      C,A         ; save result back to B
+            
+                                ; now do hours
+                                
+            LD      A,B         ; save temp copy of B       
+            AND     $0F         ; mask high nibble
+            
+            INC     B           ; inc minute count
+            INC     A
+            CP      $0A         ; test for carry in lower nibble (10)
+            JR      NZ,chk24     ; no - check for midnight 
+            
+                                ; yes - reset 1hr and inc 10hr
+            
+            LD      A,$F0       ; clear lower nubble in B
+            AND     B           ; save result in A
+            
+                                ; now incrument 10hour count
+            ADD     A,$10       ; inc 10 hour count
+            LD      B,A         ; restore B
+                                ; no need to check for 10hr carry as will reset on 24 (dec)
+            
+cont        JP      MLOOP
+
+; check for midnight (24:00)
+chk24       LD      A,$24
+            CP      B
+            JR      NZ,cont     ; no exit from update
+        
+                                ; reset to 00:00  - mins and sec will will aready be 00
+            LD      B,00        ; clear hours
+            JR      cont       ; exit
+;
+; routines
+;
+ 
+; 8bit delay            
+; Loops count as per value passed in A
+del:
+            
+del1:       DEC     A
+            JR      NZ,del1     ; no loop again
+            JP      (IX)
+
+;
+; clock set routine
+;
+ckset:
+
+            IN      A,(DIL)     ; get current switch status
+
+            BIT     6,A         ; check for inc push down
+            JP      Z,Mloop     ; no loop back to display routine
+
+                                
+db1         LD      A, $5C
+            OUT     (DISP), A      ; display something approximating to a u while push is held down       
+            IN      A, (DIL)    ; wait for push to be released
+            BIT     6,A
+            JR      NZ, db1
+
+; First clear seconds counter
+            LD      D,$00
+
+;check for hour / min update
+            BIT     7,A         ; test for minute / hour select
+            JP      NZ, hour    ; D0 down = hour set otherwise update minutes            
+
+;minute inc code            
+            LD      A,C         ; save temp copy of C         
+            AND     $0F         ; mask high nibble
+            
+            INC     C           ; inc minute count
+            INC     A
+            CP      $0A         ; test for carry in lower nibble (10)
+            JP      NZ,Mloop    ; no - exit from update
+            
+                                ; yes - reset 1s and continue with update check
+            
+            LD      A,$F0       ; clear lower nubble in C
+            AND     C
+            LD      C,A
+                                ; now incrument 10min count
+                                
+            LD      A,C         ; re fetch second data
+            AND     $F0         ; mask lower nibble
+            ADD     A,$10       ; inc 10 min count
+            LD      C,A         ; save it back to C
+            AND     $F0         ; clear lower nibble in A so we can test for carry
+            CP      $60         ; test for carry (6)
+            
+            JP      NZ,mloop    ; no - exit from update
+            
+                                ; yes - reset 10m and continue with update check
+            LD      A, $0F      ; clear high nibble in C (result will be in A)
+            AND     C           
+            LD      C,A         ; save result back to C
+            
+            JP      Mloop       ; loop back to display routine
+            
+;hour inc code            
+hour:
+            LD      A,B         ; save temp copy of B       
+            AND     $0F         ; mask high nibble
+            
+            INC     B           ; inc hour count
+            INC     A
+            CP      $0A         ; test for carry in lower nibble (10)
+            JP      NZ,chk24a   ; no - check for midnight 
+            
+                                ; yes - reset 1hr and inc 10hr
+            
+            LD      A,$F0       ; clear lower nubble in B
+            AND     B           ; save result in A
+            
+                                ; now incrument 10hour count
+            ADD     A,$10       ; inc 10 hour count
+            LD      B,A         ; restore B
+                                ; no need to check for 10hr carry as will reset on 24 (dec)
+
+            JP      Mloop
+            
+chk24a      LD     A,$24
+            CP      B
+            JP      NZ,Mloop    ; no exit from update
+        
+                                ; reset to 00:00  - mins and sec will will aready be 00
+            LD      B,00        ; clear hours
+            JP      Mloop       ; exit     
+            

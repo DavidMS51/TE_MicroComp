@@ -1,0 +1,1065 @@
+; Microcomp modilded Upper ROM
+; -------------------
+;
+; These modifications, David Saul 2022
+;
+; Taken from work Compiled and partially written by Brian Chiha
+; Disassembled code from ortinal lower pager EPROM by Brian Chiha
+;
+; This listing is based on the the full 2k upper ROM component of the Microcomp.
+; It contains a menu driver to select the programs on the ROM.  It includes
+; the following programs.  Some are standalone programs in the TE Magazines,
+; and some are unpublished found in binaries or written by Brian C.
+;
+; 
+; Master Mind - Unpublished RAMless re-write by Brian C
+; Tug O War - Published Issue 14
+; Output Demo - Written by Brian C
+
+; Dice published Issue 13/14
+; Clock published Issue 13/14 modified by David S to work with a timing pluse on D5
+;
+; The Menu driver written by Brian C at 0x0000 removes the need to select the program
+; via the DIP Switches.  Simply select the program from the visual Menu.  Press
+; Reset to restart the Menu.
+;
+; For further details ron programs modified by Brian C see his GitHub
+;
+;Constants
+BTN_A:      EQU     80H            ;Button 'A' 
+BTN_B:      EQU     40H            ;Button 'B'
+BTN_BOTH:   EQU     BTN_A + BTN_B  ;Button 'A' and 'B' 
+
+DISP        EQU     $04             ; port clock mux display is connected to
+DIL         EQU     $01             ; MICROCOMP input port
+
+            ORG     0000H
+
+; This code has is designed to work with my MicorComp that has a 9 digit VFD display connected
+
+; make sure VFD is off for non VFD applications
+            LD      A,$0f           ; this is all char off on 7448
+            OUT     (DISP), A
+            
+            
+; -----------
+; MENU DRIVER
+; -----------
+;
+  ;          JP      menu_start
+MENU_ST_H:
+            ;Start of menu routine
+            LD      A,(MENU_CON_H) ;Load A with total menu items
+            LD      I,A             ;Set I with total menu items
+            LD      C,00H
+            LD      IY,BTN_HANDLE   ;Set IY to handle button press from menu
+            LD      IX,MENU_H       ;Set IX to menu loop
+            
+MENU_H:
+            ;Menu display loop
+            LD      HL,(MENU_CON_H + 1) ;Load HL wtth Menu Text table
+            LD      A,C             ;Set A to current menu item
+            OR      A               ;Is it zero?, skip indexing
+            JR      Z,DOSCROLL      ;Just do the scroll
+            LD      B,A             ;Set A to B counter
+            JR      MENUIND
+
+
+MENU_START:
+            ;Start of menu routine
+            LD      A,(MENU_CONFIG) ;Load A with total menu items
+            LD      I,A             ;Set I with total menu items
+            LD      C,00H           ;Current menu item
+            LD      IY,BTN_HANDLE   ;Set IY to handle button press from menu
+            LD      IX,MENU         ;Set IX to menu loop
+MENU:
+            ;Menu display loop
+            LD      HL,(MENU_CONFIG + 1) ;Load HL wtth Menu Text table
+            LD      A,C             ;Set A to current menu item
+            OR      A               ;Is it zero?, skip indexing
+            JR      Z,DOSCROLL      ;Just do the scroll
+            LD      B,A             ;Set A to B counter
+MENUIND:
+            ;Find the next menu text by searching for end of line 0FFH
+            LD      A,(HL)          ;Load A contents at HL
+            INC     HL              ;Increment HL
+            INC     A               ;Is it FF, then result will be zero
+            JR      Z,MENUNEXT      ;Skip increment
+            JR      MENUIND         ;Check next menu item
+MENUNEXT:
+            DJNZ    MENUIND         ;Jump back 3 to Increment HL and repeat menu indexing
+            ;Menu found
+DOSCROLL:
+            JR      SEGSCROLL       ;Call Seven Segment Scroll routine
+                                    ;Can only exit from button press
+BTN_HANDLE:
+            ;Button Handler, A is the current button pressed
+            LD      B,A             ;Save button pressed
+            
+;            JP      BTNLOOP
+            
+            LD      A,I             ; test to see if we are in the hello loop
+            DEC     A               ; will be zero if yes
+            JR      Z, MENU_START   ; if yes restart into normal menu loop
+                                    ; no must already be in loop so continue
+            
+BTNLOOP:
+            ;Ensure button is released
+            IN      A,(01)          ;Read input latch
+            OR      A               ;Is button A still pressed?
+            JR      NZ,BTNLOOP      ;Yes, loop until released
+            LD      A,B             ;Restore button pressed
+            CP      BTN_B           ;Has button B been pressed?
+            JR      Z,MENUSEL       ;Yes, Jump to menu selection
+            ;Must be button 'A' if here. Go to next menu item
+            INC     C               ;Move to next menu item
+            LD      A,I             ;Load A with total menu items
+            SUB     C               ;Subtract current menu item from total
+            JR      Z,MENU_START    ;On last menu item, re-run from start
+            JR      MENU            ;Display menu loop
+
+MENUSEL:
+            ;Button 'B' pressed, jump to the procedure based on the menu selected
+            LD      HL,(MENU_CONFIG + 3) ;Load HL wtth Menu Jump table
+            LD      A,C             ;Set A to current menu item
+            OR      A               ;No indexing needed
+            JR      Z,RUNPROC       ;Jump to procedure
+PROCIND:
+            INC     HL              ;Move to next jump
+            INC     HL              ;Move to next jump
+            INC     HL              ;Move to next jump
+            DEC     A               ;Decrease menu index
+            JR      NZ,PROCIND      ;Move to next index
+RUNPROC:
+            JP      (HL)            ;Jump to the menu 
+            
+;Scrolling Seven Segment text.  
+; IN - HL - data to send, FF to end.  Must have atleast one character to print.
+; Exit to address pointing to IX
+SEGSCROLL:
+            LD      B,80H           ;Half Delay
+SEGLOOP:
+            ;Display on both segments
+            LD      A,(HL)          ;Load Segment data
+            SET     7,A             ;Set bit 7 to display on LH LED Segment
+            OUT     (02),A          ;Output to LH segment
+            INC     HL              ;Move to next value
+            LD      A,(HL)          ;Load Segment data
+            CP      0FFH            ;Is it end of sequence
+            JR      Z,ENDSRL        ;Yes, Exit the routine
+            OUT     (02),A          ;Output to RH segment
+            DEC     HL              ;Move back to first value
+            DJNZ    SEGLOOP         ;Repeat FF times
+            ;Check for key press
+            IN      A,(01)          ;Read input latch
+            AND     BTN_A + BTN_B   ;Has button A or B been pressed?
+            JR      Z,SEGNEXT       ;No, Keep looping display
+            JP      (IY)            ;Jump to button handler
+SEGNEXT:     
+            INC     HL              ;Move to next data value
+            JR      SEGSCROLL       ;Repeat until FF is found
+ENDSRL:     
+            JP      (IX)            ;Jump back to calling routine
+
+;---------------------------------------------------
+; END OF MENU DRIVER. MAKE YOUR CONFIGURATIONS BELOW
+;---------------------------------------------------
+
+;Must have configuration. Modify to suit
+MENU_CONFIG:
+            DB      05H         ;Number of menu items
+            DW      MENU_TEXT   ;Jump table for menu text on seven segment
+            DW      MENU_JUMP   ;Jump table for menu items
+
+MENU_TEXT:
+            DB      00h,39H,38H,3FH,39H,70H,00h,00h,0FFH;Clock
+            DB      54H,54H,77H,6DH,31H,79H,33H,54H,54H,06H,37H,5EH,00H,00H,0FFH ;Mastermind
+            DB      5EH,06H,39H,79H,00H,00H,0FFH ;dice    
+            DB      00H,31H,1CH,6FH,00H,00H,0FFH ;Tug O War
+            DB      38H,79H,5EH,00H,5EH,06H,6DH,73H,00H,00H,0FFH ;Led Demo
+
+MENU_JUMP:
+            JP      CLOCK
+            JP      MASTERMIND
+            JP      DICE
+            JP      TUGOWAR
+            JP      LEDDEMO
+            
+            
+MENU_CON_H:
+            DB      01H         ;Number of menu items
+            DW      MENU_T_H   ;Jump table for menu text on seven segment
+            DW      HELLO       ;Jump table for menu items
+
+MENU_T_H:
+            DB      00H,76H,79H,38H,38H,3fH,00H,5eH,77H,3EH,06H,5EH,00H,00H,0FFH ;Hello David
+            
+
+HELLO:      
+            JP      MENU_ST_H
+            
+            
+;-----------
+; Dice
+;-----------
+
+
+DICE:
+
+;Dice has been taken from the original lower page programs
+
+;DICE ROUTINE.  THIS IS ONE OF THE MORE COMPLEX PROGRAMS THAT COMBINES MANY
+;DIFFERENT TECHNIQUES.  IT STARTS WITH AN ANIMATION LOOP AND WHEN A KEY IS
+;PRESSED, FLASHES THE SCREEN AND DISPLAYS A DICE VALUE THAT IS MULTIPLEXED. IT
+;ALSO HAS A RANDOM FUNCTION TO GENERATE A UNIQUE DICE ROLL.
+
+;PART 1
+L0470:      LD      D,0x0C             ;LOAD D WITH 12 FOR LED SEQUENCE
+            LD      HL,DICE_TBL        ;LOAD HL WITH LED DATA TABLE
+L0475:      LD      A,(HL)             ;LOAD A WITH LED DATA
+            OUT     (02),A             ;OUTPUT TO 4X4 LEDS
+            INC     HL                 ;GET NEXT LED DATA SEQUENCE
+            LD      B,0x15             ;LOAD B WITH BUTTON TIMER FOR RANDOM NUMBER
+L047B:      LD      C,0x06             ;LOAD C WITH RANDOM DICE VALUE
+L047D:      IN      A,(01)             ;READ INPUT LATCH
+            BIT     7,A                ;HAS BUTTON "A" BEEN PRESSED?
+            JR      NZ,L048D           ;YES, JUMP TO DICE ROLE
+            DEC     C                  ;DECREASE C
+            JR      NZ,L047D           ;RE READ INPUT LATCH
+            DJNZ    L047B              ;COUNTDOWN REPEAT BUTTON CHECK
+            DEC     D                  ;MOVE COUNTER TO NEXT LED SEQUENCE
+            JR      Z,L0470            ;LOOP BACK TO FIRST SEQUENCE
+            JR      L0475              ;PRINT THE NEXT LED SEQUENCE
+;PART 2
+L048D:      LD      D,0x06             ;LOAD D WITH 6 FOR LED SEQUENCE REPEAT
+L048F:      LD      A,0x0F             ;LOAD A WITH 0F (BLANK ALL 4X4 LEDS)
+            OUT     (02),A             ;OUTPUT TO 4X4
+L0493:      DJNZ    L0493              ;DELAY
+            LD      A,0xFF             ;LOAD A WITH FF (LIGHT ALL 4X4 LEDS)
+            OUT     (02),A             ;OUTPUT TO 4X4
+L0499:      DJNZ    L0499              ;DELAY
+            DEC     D                  ;DECREASE D
+            JR      NZ,L048F           ;REPEAT PART 2
+;PART 3
+            LD      D,0x80             ;OUTPUT THE DICE FOR 80 CYCLES
+            LD      A,C                ;LOAD A WITH DICE ROLL VALUE
+            LD      HL,DICE_VALUE      ;LOAD HL WITH TABLE TO  DISPLAY 1
+            CP      0x01               ;IS ROLL  1?
+            JP      Z,L04F5            ;JUMP TO DICE DISPLAY
+            LD      HL,DICE_VALUE+3    ;LOAD HL WITH TABLE TO DISPLAY 2
+            CP      0x02               ;IS ROLL 2?
+            JP      Z,L04F5            ;JUMP TO DICE DISPLAY
+            LD      HL,DICE_VALUE+6    ;LOAD HL WITH TABLE TO DISPLAY 3
+            CP      0x03               ;IS ROLL 3?
+            JP      Z,L04F5            ;JUMP TO DICE DISPLAY
+            LD      HL,DICE_VALUE+9    ;LOAD HL WITH TABLE TO DISPLAY 4
+            CP      0x04               ;IS ROLL 4?
+            JP      Z,L04F5            ;JUMP TO DICE DISPLAY
+            LD      HL,DICE_VALUE+12   ;LOAD HL WITH TABLE TO DISPLAY 5
+            CP      0x05               ;IS ROLL 5?
+            JP      Z,L04F5            ;JUMP TO DICE DISPLAY
+            LD      HL,DICE_VALUE+15   ;LOAD HL WITH TABLE TO DISPLAY 6
+            CP      0x06               ;IS ROLL 6?
+            JP      Z,L04F5            ;JUMP TO DICE DISPLAY
+            DB      0xFF,0xFF          ;FILL
+
+;DICE LED SEQUENCE THAT MOVES AROUND THE 4X4 DISPLAY
+DICE_TBL:            
+            DB      0x71,0x72,0x74,0x78,0xB8,0xD8,0xE8,0xE4 ;4X4 LED SEQUENCE
+            DB      0xE2,0xE1,0xD1,0xB1 ; 
+
+            DB      0xFF ;FILL
+
+;DICE DISPLAY MULTIPLEX.  THE FOLLOWING 3 BYTES PER DICE ROLL ARE THE LEDS
+;NEEDED TO DISPLAY THE DICE VALUE.  EACH BYTE IS SHOWN ONE AT A TIME AND ARE
+;MULTIPLEXED TO CREATE THE ILLUSION THAT ALL BYTES ARE SHOWN AT THE SAME TIME.
+
+DICE_VALUE:          
+            DB      0xB4,0x00,0x00 ;ONE
+            DB      0xD2,0x00,0x78 ;TWO
+            DB      0x72,0xB4,0xD8 ;THREE
+            DB      0x52,0x00,0x58 ;FOUR
+            DB      0x52,0xB4,0x58 ;FIVE
+            DB      0x52,0x54,0x58 ;SIX
+
+;            DB      0xFF,0xFF,0xFF ;FILL
+
+
+;DICE DISPLAY ROUTINE TAKES IN THE THREE BYTES TO REPRESENT THE LEDS AND
+;MULTIPLEXES THEM.  ONCE 80 DISPLAY CYCLES ARE UP, AND BUTTON "A" IS RELEASED,
+;THE PROGRAM STARTS AGAIN.
+
+L04F5:      LD      A,(HL)             ;LOAD A WITH FIRST VALUE OF DICE LED VALUE
+            OUT     (02),A             ;OUTPUT TO 4X4 LEDS
+            LD      B,0x0A             ;LOAD B WITH SMALL DELAY
+L04FA:      DJNZ    L04FA              ;DELAY
+            INC     HL                 ;MOVE TO NEXT DICE LED VALUE
+            LD      A,(HL)             ;LOAD A WITH SECOND VALUE OF DICE LED VALUE
+            OUT     (02),A             ;OUTPUT TO 4X4 LEDS
+            LD      B,0x0A             ;LOAD B WITH SMALL DELAY
+L0502:      DJNZ    L0502              ;DELAY
+            INC     HL                 ;MOVE TO NEXT DICE LED VALUE
+            LD      A,(HL)             ;LOAD A WITH THRID VALUE OF DICE LED VALUE
+            OUT     (02),A             ;OUTPUT TO 4X4 LEDS
+            LD      B,0x0A             ;LOAD B WITH SMALL DELAY
+L050A:      DJNZ    L050A              ;DELAY
+            DEC     HL                 ;MOVE HL BACK TO
+            DEC     HL                 ;START OF DICE LED VALUE
+            DEC     D                  ;REDUCE DELAY CYCLE BY ONE
+            JR      NZ,L04F5           ;REPEAT DICE DISPLAY IF NOT ZERO
+            XOR     A                  ;SET A TO ZERO TO BLANK DISPLAY
+            OUT     (02),A             ;OUTPUT TO 4X4 LEDS
+L0514:      IN      A,(01)             ;READ INPUT LATCH
+            BIT     7,A                ;IS BUTTON "A" STILL PRESSED?
+            JR      NZ,L0514           ;RE READ INPUT IF TRUE
+            JP      L0470              ;RESTART DICE ROUTINE
+
+;            DB      0xFF,0xFF,0xFF ;FILL
+
+
+;-------------
+;Clock
+;-------------
+
+CLOCK:
+
+; As I have added 1Hz clock source to my Micocomp, it seemed sensible to
+; modify the orininal code to incrument based on this rather than the orginal option
+
+;BINARY CLOCK ROUTINE DISPLAYS A BINARY CLOCK USING THE 4X4 LED DISPLAY.  THE
+;CLOCK USES MULTIPLEXING TO DISPLAY MULTIPLE VALUES ON THE 4X4.  BINARY VALUES
+;ARE DISPLAYED BOTTOM TO TOP AND TIME FROM RIGHT TO LEFT.   TIME IS SPLIT IN
+;LOW MINUTES, MINUTES, HOURS AND TENS OF HOURS.  THE INITIAL TIME IS 0100.  
+
+
+
+;BUTTON 'A' IS PRESSED IT WILL AUTO INCREMENT THE CLOCK, OTHERWISE IT WILL
+;INCREMENT AUTOMATICALLY BASED ON THE VALUE ON THE INPUT LATCH.
+
+
+;    O O O O
+;    O O O O  (T)EN HOURS
+;    O O O O  (H)OURS
+;    O O O O  (M)INUTES
+;    ^ ^ ^ ^  (L)OW MINUTES
+;    T H M L
+
+L0630:      LD      DE,0x0100          ;START TIME OF 0100 IE:1PM
+L0633:      LD      SP,0x09D0          ;MINUTE TIMER STORED IN SP REGISTER
+L0636:      LD      HL,BIN_SEC         ;POINT HL TO SECONDS TABLE
+            LD      A,E                ;INDEX A WITH MINUTES
+            AND     0x0F               ;MASK OFF TENS OF SECONDS
+            ADD     A,L                ;INDEX A WITH L
+            LD      L,A                ;INDEX TABLE WITH A
+            LD      A,(HL)             ;LOAD LED VALUE TO A
+            OUT     (02),A             ;OUTPUT TO 4X4
+            LD      HL,BIN_MIN         ;POINT HL TO TENS OF MINUTES TABLE
+            LD      A,E                ;INDEX A WITH MINUTES
+            RRA                        ;SWAP LOW
+            RRA                        ;NIBBLE WITH
+            RRA                        ;HIGH
+            RRA                        ;NIBBLE
+            AND     0x0F               ;MASK OFF LOW MINUTES
+            ADD     A,L                ;INDEX A WITH L
+            LD      L,A                ;INDEX TABLE WITH A
+            LD      A,(HL)             ;LOAD LED VALUE TO A
+            OUT     (02),A             ;OUTPUT TO 4X4
+            LD      HL,BIN_HRS         ;POINT HL TO LOW HOURS TABLE
+            LD      A,D                ;INDEX A WITH HOURS
+            AND     0x0F               ;MASK OFF TENS OF HOURS
+            ADD     A,L                ;INDEX A WITH L
+            LD      L,A                ;INDEX TABLE WITH A
+            LD      A,(HL)             ;LOAD LED VALUE TO A
+            OUT     (02),A             ;OUTPUT TO 4X4
+            LD      HL,BIN_TNS         ;POINT HL TO TENS OF HOURS TABLE
+            LD      A,D                ;INDEX A WITH HOURS
+            RRA                        ;SWAP LOW
+            RRA                        ;NIBBLE WITH
+            RRA                        ;HIGH
+            RRA                        ;NIBBLE
+            AND     0x0F               ;MASK OFF LOW HOURS
+            ADD     A,L                ;INDEX A WITH L
+            LD      L,A                ;INDEX TABLE WITH A
+            LD      A,(HL)             ;LOAD LED VALUE TO A
+            OUT     (02),A             ;OUTPUT TO 4X4
+            
+; Revised timing code
+; On my MICROCOMP I have a added a circuit to puls the bit 5 line on port 1 one a second
+; this is driven from an the ac supply to the MicorCOMP, so it seemed obviuos to 
+; use this to create a one second delayt
+
+; this needs to be checked confirm the used reg are avialble           
+tick:
+; test for tick
+            IN      A,(DIL)
+            BIT     5,A
+            JR      Z,tick1         ; no then skip
+                                    ; flag pulse detected
+                                    ; but is it new ?
+            LD      A,I
+            BIT     7,A
+            JR      NZ,L0633      ; already counted so skip update
+                                    ; yes new so flag by setting bit 7 of I to $1
+            SET     7,A           
+            LD      I,A
+            JR      timeinc         ; go on with time incruement
+            
+            
+tick1       LD      A,I             ; make sure pulse detect flag has been cleared
+            RES     7,A
+            LD      I,A
+            JP      L0633           ; skip time inc
+            
+
+timeinc:    LD      A,E                ;LOAD MINUTES TO A
+            INC     A                  ;INCREASE MINUTES
+            DAA                        ;CONVERT TO DECIMAL
+            LD      E,A                ;LOAD DECIMAL VALUE BACK TO E
+            CP      0x60               ;COMPARE A WITH 60 MINUTES
+            JP      NZ,L0633           ;SKIP
+            LD      E,0x00             ;LOAD
+            LD      A,D                ;LOAD
+            INC     A                  ;INCREASE HOURS
+            DAA                        ;CONVERT TO DECIMAL
+            LD      D,A                ;LOAD DECIMAL VALUE BACK TO D
+            CP      0x13               ;COMPARE A WITH 13 HOURS
+            JP      NZ,L0633           ;NOT 13 THEN JUMP TO DISPLAY UPDATE
+            JP      L0630              ;RESTART COUNTER BACK TO 0100
+            DB      0x00               ;FILL
+
+;BINARY CLOCK 4X4 LED SEQUENCE.  EACH VALUE IS INDEXED BASED ON CLOCK VALUE
+BIN_SEC:    DB      0xF8,0xE8,0xD8,0xC8,0xB8,0xA8,0x98,0x88,0x78,0x68 ;SECONDS
+BIN_MIN:    DB      0xF4,0xE4,0xD4,0xC4,0xB4,0xA4 ;MINUTES
+BIN_HRS:    DB      0xF2,0xE2,0xD2,0xC2,0xB2,0xA2,0x92,0x82,0x72,0x62 ;HOURS (ONES)
+BIN_TNS:    DB      0xF1,0xE1 ;HOURS (TENS)
+
+ ;           DB      0x00,0xFF,0x00,0xFF ;FILL
+
+
+
+;------------
+; Master Mind
+;------------
+MASTERMIND:
+            LD      BC,0000H   ;Load BC with zero random number calculator
+MM_SETUP:               
+            ;Generate a random 2 byte number for the mastermind answer
+            INC     BC         ;Increase BC
+            LD      A,R        ;Save R register to A
+            ADD     A,B        ;Add B to A
+            ADC     A,C        ;Add C to A
+            ADD     A,B        ;Add B to A again
+            ADD     A,C        ;Add C to A again
+            RLCA               ;Rotate A left
+            LD      D,A        ;Save A into D
+            LD      A,C        ;Load C to A 
+            AND     1FH        ;Check if Bits 0-4 are set
+            JR      NZ,MM_SKIP1 ;No, Skip output
+            LD      A,D        ;Reload A with actual value to output
+            OUT     (02),A     ;Display value of A
+MM_SKIP1:   IN      A,(01)     ;Read input latch
+            CP      BTN_A      ;Has button A been pressed?
+            JR      NZ,MM_SETUP ;Yes, set up game data
+
+            ;Save random number in SP
+            LD      A,D        ;Restore A
+            DAA                ;Fix to remove A-F
+            LD      H,A        ;Save in H
+            CPL                ;Invert bits to mix up number
+            DAA                ;Fix to remove A-F
+            LD      L,A        ;Svae in L
+            LD      SP,HL      ;Save in HL
+
+            ;Setup is complete start game loop
+MM_GAME:
+            ;Output '--' on the seven segment displays to indicate a new round
+            LD      B,0FFH     ;Load B with long delay
+MM_LOOP1:
+            LD      A,40H      ;Load A with RH middle segment
+            OUT     (02),A     ;Output to RH segment
+            LD      A,0C0H     ;Load A with LH middle segment
+            OUT     (02),A     ;Output to LH segment
+            DJNZ    MM_LOOP1   ;Repeat B times
+
+            ;Initialize counters
+            XOR     A          ;Zero A
+            LD      I,A        ;Reset counters and store in I
+            LD      DE,0000H   ;Clear DE for player keys
+            LD      C,04H      ;Counter for number of values to key
+NEXTKEY:
+            ;Select HEX value.  Use Button A to cycle through numbers
+            ;Button B to select
+            LD      IY,MM_SEGTBL ;Load IY with start of segment table starting at 0
+            LD      L,00H      ;Load index L with 1
+MM_DISPLAY:
+            ;Display next hex value on seven segment display
+            LD      A,(IY+0)   ;Load segment value at IY to A
+            OUT     (02),A     ;Output the RH segment
+KEYPRESS:
+            ;Check for key press
+            IN      A,(01)     ;Read input latch
+            CP      BTN_B      ;Has button B been pressed?
+            JR      Z,KEYSEL   ;Yes, Jump to key selection
+            CP      BTN_A      ;Has button A been pressed?
+            JR      NZ,KEYPRESS ;No, Repeat key press loop
+MM_LOOP3:
+            IN      A,(01)     ;Read input latch
+            CP      BTN_A      ;Is button A still pressed?
+            JR      Z,MM_LOOP3 ;Yes, loop until released
+NEXTVAL:
+            ;Button A pressed. Check if lookup table overflow
+            DJNZ    NEXTVAL    ;Delay
+            INC     IY         ;Move IY to next segment in table
+            INC     L          ;Increase segment index
+            LD      A,L        ;Load segment index to A
+            DAA                ;Wrap back to zero if passed 9
+            AND     0FH        ;Mask off upper nibble to keep to single digit
+            JR      Z,NEXTKEY  ;Overflow, reset table index
+            LD      L,A        ;Save back to L
+            JR      MM_DISPLAY ;Display the next character
+
+            ;A character has been selected with button B, handle it
+KEYSEL:
+            LD      A,L        ;Load A with segment index
+            ;Shift value into DE from the right
+            OR      E          ;Add E to A. Lower nibble is always 0
+            LD      E,A        ;Update E
+            LD      A,C        ;Check if on last number
+            DEC     A          ;Check for zero
+            JR      Z,MM_LOOP6 ;Skip shift if on last character     
+            LD      B,04H      ;Shift four times
+MM_LOOP5:
+            SLA     E          ;Shift E left by one, set carry flag with bit 7
+            RL      D          ;Shift D left by one, set bit 0 with carry flag
+            DJNZ    MM_LOOP5   ;Repeat 4 times
+            ;Wait if button B is still pressed
+MM_LOOP6:
+            IN      A,(01)     ;Read input latch
+            CP      BTN_B      ;Is button B still pressed?
+            JR      Z,MM_LOOP6 ;Yes, loop until released
+
+            ;Display a pattern to show a value has been selected
+            LD      B,08H      ;Count of segments in lookup table
+            LD      HL,ANIMATE ;Load HL to base of animate table
+LOOPANI:
+            LD      A,(HL)     ;Load Segment
+            OUT     (02),A     ;Output to RH segment
+            EXX                ;Save registers
+            LD      B,0FFH     ;Full delay
+MM_DELAY:   DJNZ    MM_DELAY   ;Delay
+            EXX                ;Restore registers
+            INC     HL         ;Move to next segment
+            DJNZ    LOOPANI    ;Display next segment
+
+            ;Have all four values been keyed?
+            DEC     C          ;Decrease value keyed counter
+            JR      NZ,NEXTKEY ;More to key? Ask for next key
+
+            ;Check keyed values in DE with actual values in SP
+            LD      HL,0000H   ;Clear HL
+            ADD     HL,SP      ;Load SP into HL so it can be used
+            
+            ;Cycle through all values in DE and HL, check for matching values in the
+            ;correct spot
+            LD      B,04H      ;Loop 4 times to check each value
+CORRECT:
+            LD      A,E        ;Load E in A to mask
+            AND     0FH        ;Mask out upper nibble
+            LD      C,A        ;Save in C
+            LD      A,L        ;Load L in A to mask
+            AND     0FH        ;Mask out upper nibble
+            CP      C          ;Are they the same?
+            JR      NZ,WRONG1  ;No, Skip updating score
+            ;Exact Match, Update tally
+            LD      A,I        ;Load counter to A
+            ADD     A,01H      ;Add one
+            LD      I,A        ;Save it back
+            ;Rotate DE,HL bits four times to find the next value
+WRONG1:
+            LD      C,04H      ;Loop four times
+MM_LOOP7:
+            SLA     H          ;Shift left one with bit 7 in carry 
+            RL      L          ;Rotate left one with bit 1 set with carry
+            JR      NC,MM_SKIP2 ;If no carry then don't update H
+            INC     H          ;Add one as carry is set
+MM_SKIP2:
+            SLA     D          ;Shift left one with bit 7 in carry 
+            RL      E          ;Rotate left one with bit 1 set with carry
+            JR      NC,MM_SKIP3 ;If no carry then don't update D
+            INC     D          ;Add one as carry is set
+MM_SKIP3:
+            DEC     C          ;Decrease counter
+            JR      NZ,MM_LOOP7 ;Repeat if not zero
+            DJNZ    CORRECT      ;Check the next value
+
+            ;Cycle through all values in DE and HL, check for matching values in the
+            ;incorrect spot
+            EXX                ;Out of counters, use shaddow
+            LD      B,04H      ;Loop through all 4 keyed values
+INCORRECT:
+            EXX                ;Swap back
+            LD      B,03H      ;Loop four time to check values
+NEXTHL:
+            LD      C,04H      ;Loop four times
+ROTHL:
+            SLA     H          ;Shift left one with bit 7 in carry 
+            RL      L          ;Rotate left one with bit 1 set with carry
+            JR      NC,SKIPH   ;If no carry then don't update H
+            INC     H          ;Add one as carry is set
+SKIPH:            
+            DEC     C          ;Decrease counter
+            JR      NZ,ROTHL   ;Repeat if not zero
+            ;Compare lower nibbles of HL and DE
+            LD      A,E        ;Load E in A to mask
+            AND     0FH        ;Mask out upper nibble
+            LD      C,A        ;Save in C
+            LD      A,L        ;Load L in A to mask
+            AND     0FH        ;Mask out upper nibble
+            CP      C          ;Are they the same?
+            JR      NZ,WRONG2  ;No, Skip updating score
+            ;Incorrect Match, Update tally
+            LD      A,I        ;Load counter to A
+            ADD     A,10H      ;Add 10 hex
+            LD      I,A        ;Save it back
+            ;Rotate DE
+WRONG2:
+            DJNZ    NEXTHL
+            ;Rotate DE right to get the next value
+            LD      B,04H      ;Do 4 times
+ROTDE:
+            SRL     D          ;Shift right one with bit 0 in carry 
+            RR      E          ;Rotate left one with bit 1 set with carry
+            JR      NC,SKIPD   ;If no carry then don't update D
+            SET     7,D        ;Set bit 7 to account for carry flag
+SKIPD:
+            DJNZ    ROTDE      ;Repeat until done
+            ;Do outer loop
+            EXX                ;Get Shaddow B
+            DJNZ    INCORRECT  ;Do again until all values are checked
+
+            EXX                ;Reset registers.
+
+            ;All values have been checked.  Display match score. Display from first
+            ;keyed value to last, one at a time.
+DISPLOOP:
+            ;Display keyed values and match score loop
+            DJNZ    DISPLOOP   ;Delay
+MM_LOOP8:   DJNZ    MM_LOOP8   ;Delay
+            LD      C,04H      ;Load C with digits to display
+VALUE:
+            ;Rotate DE to get next value
+            LD      B,04H      ;Four bits to rotate
+MM_LOOP9:
+            SLA     D          ;Shift left one with bit 7 in carry 
+            RL      E          ;Rotate left one with bit 1 set with carry
+            JR      NC,MM_SKIP4 ;If no carry then don't update D
+            INC     D          ;Add one as carry is set
+MM_SKIP4:            
+            DJNZ    MM_LOOP9   ;Repeat until done
+
+            ;Do the Seven Segment lookup
+            LD      HL,MM_SEGTBL ;Load HL with segment Lookup table
+            LD      A,E        ;Load E in A to mask
+            AND     0FH        ;Mask out upper nibble
+            ADD     A,L        ;Add index to key
+            LD      L,A        ;Load new index back to L
+            LD      A,(HL)     ;Load A with segment value
+            OUT     (02),A     ;Output keyed value t0 RH segment
+MM_LOOP10:  DJNZ    MM_LOOP10  ;Delay
+MM_LOOP11:  DJNZ    MM_LOOP11  ;Delay
+MM_LOOP12:  DJNZ    MM_LOOP12  ;Delay
+MM_LOOP13:
+            XOR     A          ;Zero A
+            OUT     (02),A     ;Blank Segments
+            DJNZ    MM_LOOP13  ;Loop to keep blank
+ 
+            DEC     C          ;Decrease C
+            JR      NZ,VALUE   ;Display next value
+
+            ;Display correct/incorrect position count
+            XOR     A          ;Zero A
+            OUT     (02),A     ;Blank Segments
+MM_LOOP14:  DJNZ    MM_LOOP14  ;Delay
+MM_LOOP15:  DJNZ    MM_LOOP15  ;Delay
+POSTYP:
+            LD      C,02H      ;Load C with position type counter
+MM_LOOP16:
+            LD      HL,MM_SEGTBL ;Load HL with segment Lookup table
+            LD      A,I        ;Load A Counter
+            AND     0FH        ;Mask out upper nibble
+            ADD     A,L        ;Add L to A
+            LD      L,A        ;Load new index back to L
+            LD      A,(HL)     ;Load A with segment value
+            SET     7,A        ;Set Bit 7 on A to display on LH segment
+            OUT     (02),A     ;Output correct position count to LH segment
+            LD      HL,MM_SEGTBL ;Load HL with segment Lookup table
+            LD      A,I        ;Load A Counter
+            SRL     A          ;Shift right 1
+            SRL     A          ;Shift right 1
+            SRL     A          ;Shift right 1
+            SRL     A          ;Shift right 1
+            ADD     A,L        ;Add L to A
+            LD      L,A        ;Load new index back to L
+            LD      A,(HL)     ;Load A with segment value
+            OUT     (02),A     ;Output incorrect position count to RH segment
+            ;Check input for next game choice
+            IN      A,(01)     ;Read input latch
+            CP      BTN_A      ;Has button A been pressed?
+            JP      Z,MM_GAME  ;Yes, restart for next round
+            CP      BTN_BOTH   ;Are both buttons pressed?
+            JR      Z,GIVEUP   ;Yes, display actually values and give up!
+            DEC     C          ;Decrease C to display next position count
+            JR      NZ,MM_LOOP16 ;Not Zero, display position count again
+            DJNZ    POSTYP     ;Repeat display unilt B = 0
+            XOR     A          ;Zero A
+            OUT     (02),A     ;Blank Segments
+            JR      DISPLOOP   ;Re display position count
+GIVEUP:
+            ;Bit 0 set, so give up and display actual sequence
+            LD      HL,0000H    ;Load HL with 0
+            ADD     HL,SP       ;Get real values from SP to HL
+            EX      DE,HL       ;Store HL in DE
+            JR      DISPLOOP    ;Jump to Display loop to show actual sequence
+            
+            ;Ascii character table for seven segment display
+MM_SEGTBL:  DB      3FH,06H,5BH,4FH,66H,6DH,7DH,07H,7FH,67H  ;0-9
+ANIMATE:    DB      01H,02H,04H,08H,88H,90H,0A0H,81H         ;Animation sequence
+
+
+
+;----------
+; Tug O War
+;----------
+TUGOWAR:
+            ;Start up
+            LD      HL,TW_SEGTBL  ;Point to start of 0-9 table for LH display
+            LD      DE,TW_SEGTBL  ;Point to start of 0-9 table for RH display
+            LD      C,00H      ;Load Button Debounce test flag register with zero
+TW_DISPLAY:
+            ;Display multiplexing
+            LD      A,(DE)     ;Load A with the current digit for RH display
+            OUT     (02),A     ;Output digit to RH display
+            LD      B,20H      ;Load B with short delay
+TW_LOOP1:   DJNZ    TW_LOOP1   ;Delay
+            XOR     A          ;Zero A
+            SET     7,A        ;Set Bit 7 to activate LH display
+            ADD     A,(HL)     ;Add A with the current digit for LH display
+            OUT     (02),A     ;Output digit to LH display
+BUTTONS:
+            ;Look at Buttons
+            IN      A,(01)     ;Read input latch
+            CP      BTN_BOTH   ;Are both buttons pressed? 40H + 80H = C0H
+            JR      Z,NO_UPD   ;Yes, Don't update anything and repeat display
+            CP      BTN_B      ;Has button 'B' been pressed?
+            JR      Z,B_PRESS  ;Yes, Handle button 'B' pressed
+            RES     0,C        ;No, Reset Button 'B' pressed flag
+CHK_A: 
+            IN      A,(01)     ;Read input latch
+            CP      BTN_BOTH   ;Are both buttons pressed? 40H + 80H = C0H
+            JR      Z,NO_UPD   ;Yes, Don't update anything and repeat display
+            CP      BTN_A      ;Has button 'A' been pressed?
+            JR      Z,A_PRESS  ;Yes, Handle button 'B' pressed
+            RES     1,C        ;No, Reset Button 'A' pressed flag
+NO_UPD:
+            ;Repeat Display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP2:   DJNZ    TW_LOOP2   ;Delay
+            JR      TW_DISPLAY ;Jump back to display routine
+B_PRESS:
+            ;Button 'B' pressed
+            BIT     0,C        ;Has button 'B' already been pressed?
+            JR      NZ,CHK_A   ;Yes, check button 'A'
+            SET     0,C        ;Set button 'B' pressed flag
+            INC     DE         ;Move current digit for RH closer to 9
+            LD      A,(DE)     ;Load A with the next digit for RH display
+            CP      67H        ;Is it 9? 
+            JR      NZ,DEC_A   ;No, Jump to Decrease LH player
+            ;Player B wins
+DIS_WIN_B:                     ;Flash RH display
+            LD      C,10H      ;Load C with multiplex delay
+TW_LOOP3:
+            LD      A,(DE)     ;Load A with the current digit for RH display
+            OUT     (02),A     ;Output digit to RH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP4:   DJNZ    TW_LOOP4   ;Delay
+            XOR     A          ;Zero A
+            SET     7,A        ;Set Bit 7 to activate LH display
+            ADD     A,(HL)     ;Add A with the current digit for LH display
+            OUT     (02),A     ;Output digit to LH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP5:   DJNZ    TW_LOOP5   ;Delay
+            DEC     C          ;Decrease multiplex repeater
+            JR      NZ,TW_LOOP3 ;Repeat display
+            LD      C,10H      ;Load C with multiplex delay
+TW_LOOP6:
+            XOR     A          ;Zero A
+            OUT     (02),A     ;Output digit to RH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP7:   DJNZ    TW_LOOP7   ;Delay
+            XOR     A          ;Zero A
+            SET     7,A        ;Set Bit 7 to activate LH display
+            ADD     A,(HL)     ;Add A with the current digit for LH display
+            OUT     (02),A     ;Output digit to LH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP8:   DJNZ    TW_LOOP8   ;Delay
+            DEC     C          ;Decrease multiplex repeater
+            JR      NZ,TW_LOOP6 ;Repeat display
+            JR      DIS_WIN_B  ;Keep Flashing Screen forever!
+DEC_A:
+            ;Decrease LH Player digit
+            LD      A,(HL)     ;Add A with the current digit for LH display
+            CP      3FH        ;Is it Zero?
+            JR      NZ,DO_DEC_A ;No, Do Decrease
+            JR      BUTTONS    ;Yes, Just check buttons again and display
+DO_DEC_A:
+            DEC     HL         ;Move LH Player back one digit
+            JR      BUTTONS    ;Check buttons again and display
+A_PRESS:
+            ;Button 'A' pressed
+            BIT     1,C        ;Has button 'A' already been pressed?
+            JR      NZ,NO_UPD  ;Yes, Don't update anything and repeat display
+            SET     1,C        ;Set button 'A' pressed flag
+            INC     HL         ;Move current digit for LH closer to 9
+            LD      A,(HL)     ;Load A with the next digit for LH display
+            CP      67H        ;Is it 9? 
+            JR      NZ,DEC_B   ;No, Jump to Decrease RH player
+            ;Player A wins
+DIS_WIN_A:                     ;Flash RH display
+            LD      C,10H      ;Load C with multiplex delay
+TW_LOOP9:
+            LD      A,(DE)     ;Load A with the current digit for RH display
+            OUT     (02),A     ;Output digit to RH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP10:  DJNZ    TW_LOOP10  ;Delay
+            XOR     A          ;Zero A
+            SET     7,A        ;Set Bit 7 to activate LH display
+            ADD     A,(HL)     ;Add A with the current digit for LH display
+            OUT     (02),A     ;Output digit to LH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP11:  DJNZ    TW_LOOP11  ;Delay
+            DEC     C          ;Decrease multiplex repeater
+            JR      NZ,TW_LOOP9 ;Repeat display
+            LD      C,10H      ;Load C with multiplex delay
+TW_LOOP12:
+            LD      A,(DE)     ;Load A with the current digit for RH display
+            OUT     (02),A     ;Output digit to RH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP13:  DJNZ    TW_LOOP13  ;Delay
+            XOR     A          ;Zero A
+            OUT     (02),A     ;Output digit to LH display
+            LD      B,10H      ;Load B with short delay
+TW_LOOP14:  DJNZ    TW_LOOP14  ;Delay
+            DEC     C          ;Decrease multiplex repeater
+            JR      NZ,TW_LOOP12 ;Repeat display
+            JR      DIS_WIN_A  ;Keep Flashing Screen forever!
+DEC_B:
+            ;Decrease RH Player digit
+            LD      A,(DE)     ;Load A with the current digit for RH display
+            CP      3FH        ;Is it Zero?
+            JR      NZ,DO_DEC_B ;No, Do Decrease
+            JP      BUTTONS    ;Yes, Just check buttons again and display
+DO_DEC_B:
+            DEC     DE         ;Move RH Player back one digit
+            JP      BUTTONS    ;Check buttons again and display
+
+;Table that displays the numbers 0-9.  Numbers repeat more as they get closer to 9
+TW_SEGTBL:  DB      3FH,06H,06H,5BH,5BH,5BH,4FH,4FH  ;01122233
+            DB      4FH,4FH,66H,66H,66H,66H,66H,6DH  ;33444445
+            DB      6DH,6DH,6DH,6DH,6DH,7DH,7DH,7DH  ;55555666
+            DB      7DH,7DH,7DH,7DH,07H,07H,07H,07H  ;66667777
+            DB      07H,07H,07H,07H,7FH,7FH,7FH,7FH  ;77778888
+            DB      7FH,7FH,7FH,7FH,7FH,67H          ;888889
+;Fill
+;            DB      00H,00H,00H,00H,00H,00H,00H,00H
+
+;---------
+; LED Demo
+;---------
+LEDDEMO:
+            LD      IY,DATA_TBL ;Point IY to start of data table
+
+OD_DISPLAY: 
+            LD      L,(IY+00H)  ;Load L
+            LD      H,(IY+01H)  ;Load H
+            INC     IY          ;Move to next data location
+            INC     IY          ;
+            ;Check for zero
+            LD      A,H         ;Load A with H
+            OR      L           ;Compare with L
+            JR      NZ,$+3      ;Not zero do display
+            ;Exit
+            RST     00H         ;Restart Program
+
+            LD      C,(IY+00H)  ;Load loop counter
+            INC     IY          ;Move to next data location
+            LD      IX,$+6      ;Next routines
+            JR      LEDSEQ      ;Display Routine
+
+            LD      L,(IY+00H)  ;Load L
+            LD      H,(IY+01H)  ;Load H
+            INC     IY          ;Move to next data location
+            INC     IY          ;
+            LD      C,(IY+00H)  ;Load loop counter
+            INC     IY          ;Move to next data location
+
+            LD      IX,OD_DISPLAY ;Next routines
+            JR      LEDMUX      ;Display Routine
+
+;Output Directly to the LED's with sequential data
+; IN - HL - data to send, FF to end
+; Exit to address pointing to IX
+LEDSEQ:
+            LD      SP,HL      ;Save HL for looping
+OD_LOOP1:
+            LD      A,(HL)     ;Load Data
+            CP      0FFH       ;Is it end of sequence
+            JR      Z,ENDSEQ   ;Yes, Exit the routine
+            OUT     (02),A     ;Send to Output latch
+            LD      B,0FFH     ;Full delay
+LEDDLY:     DJNZ    LEDDLY     ;Delay
+            INC     HL         ;Move to next segment
+            JR      OD_LOOP1   ;Display next segment
+ENDSEQ: 
+            LD      HL,0000H   ;Wipe HL
+            ADD     HL,SP      ;Restore HL
+            DEC     C          ;Decrease loop counter
+            JR      NZ,OD_LOOP1 ;Repeat sequence
+            JP      (IX)       ;Jump back to calling routine
+
+
+;Multiplex the 4x4 LED's
+; IN - HL - data to send (in groups of 4, one byte per column), FF to end
+; Exit to address pointing to IX
+LEDMUX:
+            LD      SP,HL      ;Save HL for looping
+OD_LOOP2:
+            LD      A,(HL)     ;Load Segment data
+            CP      0FFH       ;Is it end of sequence
+            JR      Z,ENDMUX   ;Yes, Exit the routine
+            LD      B,040H     ;Half Delay
+MUXLOOP:
+            LD      D,04H      ;Four columns
+MUXOUT: 
+            LD      A,(HL)     ;Load Segment data
+            OUT     (02),A     ;Output to 4x4 LED
+            INC     HL         ;Move to next column
+            DEC     D          ;One less column
+            JR      NZ,MUXOUT  ;Display next column
+            LD      A,B        ;Load B to A
+            SUB     01H        ;Is it on the last run, skip roll back
+            JR      Z,MUXSKIP  ;Skip roll back as on last display loop
+            DEC     HL         ;Roll back HL
+            DEC     HL         ;Roll back HL
+            DEC     HL         ;Roll back HL
+            DEC     HL         ;Roll back HL
+MUXSKIP:
+            DJNZ    MUXLOOP    ;Do 4x4 loop again FF times
+            JR      OD_LOOP2     ;Repeat until FF
+ENDMUX:
+            LD      HL,0000H   ;Wipe HL
+            ADD     HL,SP      ;Restore HL
+            DEC     C          ;Decrease loop counter
+            JR      NZ,OD_LOOP2 ;Repeat sequence
+            JP      (IX)       ;Jump back to calling routine
+
+;Data table lookup to help reduce code duplication
+DATA_TBL:
+            DW      OD_DATA1
+            DB      08H
+            DW      OD_DATA2
+            DB      04H
+            DW      OD_DATA3
+            DB      06H
+            DW      OD_DATA4
+            DB      04H
+            DW      OD_DATA5
+            DB      02H
+            DW      OD_DATA6
+            DB      01H
+            DW      OD_DATA7
+            DB      04H
+            DW      OD_DATA8
+            DB      03H
+            DW      OD_DATA9
+            DB      04H
+            DW      OD_DATA10
+            DB      02H
+            DW      OD_DATA11
+            DB      04H
+            DW      OD_DATA12
+            DB      08H,00H,00H 
+
+OD_DATA1:   DB      001H,002H,004H,008H,010H,020H,040H,080H,0FFH ;All bites
+OD_DATA2:   DB      071H,0B2H,0D4H,0E8H,078H,0B4H,0D2H,0E1H,0FFH ;Diagonals
+OD_DATA3:   DB      081H,001H,002H,040H,0C0H,090H,088H,008H      ;Round Segments
+            DB      004H,040H,0C0H,0A0H,0FFH                     
+OD_DATA4:   DB      0E1H,0C2H,084H,008H,001H,082H,0C4H,0E8H      ;Rotating Triangle
+            DB      001H,012H,034H,078H,071H,032H,014H,008H,0FFH 
+OD_DATA5:   DB      071H,033H,017H,00FH,08EH,0CCH,0E8H,000H      ;4 Corner Strobe
+            DB      0E1H,0C3H,087H,00FH,01EH,03CH,078H,000H
+            DB      0E8H,0CCH,08EH,00FH,017H,033H,071H,000H
+            DB      078H,03CH,01EH,00FH,087H,0C3H,0E1H,000H,0FFH 
+OD_DATA6:   DB      0F1H,0F2H,0F4H,0F8H,0F1H,0F2H,0F4H,088H      ;Microcomp Scroll
+            DB      0F1H,0F2H,084H,078H,0F1H,082H,074H,088H
+            DB      081H,072H,084H,078H,071H,082H,074H,088H
+            DB      081H,072H,084H,0F8H,071H,082H,0F4H,048H
+            DB      081H,0F2H,044H,0F8H,0F1H,042H,0F4H,098H
+            DB      041H,0F2H,094H,068H,0F1H,092H,064H,068H
+            DB      091H,062H,064H,0F8H,061H,062H,0F4H,088H
+            DB      061H,0F2H,084H,078H,0F1H,082H,074H,078H
+            DB      081H,072H,074H,0F8H,071H,072H,0F4H,098H
+            DB      071H,0F2H,094H,068H,0F1H,092H,064H,068H
+            DB      091H,062H,064H,098H,061H,062H,094H,0F8H
+            DB      061H,092H,0F4H,098H,091H,0F2H,094H,068H
+            DB      0F1H,092H,064H,068H,091H,062H,064H,0F8H
+            DB      061H,062H,0F4H,098H,061H,0F2H,094H,068H
+            DB      0F1H,092H,064H,068H,091H,062H,064H,098H
+            DB      061H,062H,094H,0F8H,061H,092H,0F4H,088H
+            DB      091H,0F2H,084H,078H,0F1H,082H,074H,088H
+            DB      081H,072H,084H,078H,071H,082H,074H,088H
+            DB      081H,072H,084H,0F8H,071H,082H,0F4H,008H
+            DB      081H,0F2H,004H,058H,0F1H,002H,054H,018H
+            DB      001H,052H,014H,0F8H,051H,012H,0F4H,0F8H
+            DB      011H,0F2H,0F4H,0F8H,0F1H,0F2H,0F4H,0F8H,0FFH 
+OD_DATA7:   DB      071H,072H,074H,078H,0B8H,0B4H,0B2H,0B1H      ;Zig Zag
+            DB      0D1H,0D2H,0D4H,0D8H,0E8H,0E4H,0E2H,0D1H
+            DB      0B1H,071H,072H,0B2H,0D2H,0E2H,0E4H,0D4H
+            DB      0B4H,074H,078H,0B8H,0D8H,0E8H,0E4H,0E2H
+            DB      0E1H,0D1H,0B1H,0FFH                          
+OD_DATA8:   DB      071H,092H,094H,0E8H,0F1H,012H,084H,0F8H      ;Propeller
+            DB      0F1H,082H,014H,0F8H,0E1H,092H,094H,078H
+            DB      0D1H,092H,094H,0B8H,0B1H,092H,094H,0D8H,0FFH 
+OD_DATA9:   DB      071H,078H,0E8H,0E1H,033H,03CH,0CCH,0C3H      ;Square Circle
+            DB      017H,01EH,08EH,087H,00FH,00FH,00FH,00FH
+            DB      017H,01EH,08EH,087H,033H,03CH,0CCH,0C3H
+            DB      071H,078H,0E8H,0E1H,0FFH                     
+OD_DATA10:  DB      0C1H,0E2H,0E4H,0E8H,0C1H,0E2H,0E4H,0C8H      ;Running Man
+            DB      0E1H,0A2H,0C4H,0E8H,0E1H,0C2H,064H,0E8H
+            DB      0C1H,0E2H,0A4H,0E8H,0E1H,0C2H,0E4H,0E8H
+            DB      0C1H,0E2H,0E4H,0E8H,0C1H,0E2H,0E4H,088H
+            DB      0E1H,0A2H,084H,0E8H,0E1H,082H,064H,0E8H
+            DB      081H,0E2H,0A4H,0E8H,0E1H,0C2H,0E4H,0E8H
+            DB      0C1H,0E2H,0E4H,0E8H,0C1H,0E2H,0E4H,008H
+            DB      0E1H,0A2H,004H,0E8H,061H,002H,0E4H,0E8H
+            DB      0A1H,002H,0E4H,0E8H,0C1H,002H,0E4H,0E8H
+            DB      0C1H,022H,0E4H,0E8H,001H,0E2H,0E4H,0E8H
+            DB      021H,0C2H,0E4H,0E8H,0E1H,0C2H,0E4H,0E8H
+            DB      0C1H,0E2H,0E4H,0E8H,0C1H,0E2H,0E4H,0F8H
+            DB      0C1H,0E2H,0F4H,0E8H,0C1H,0F2H,0E4H,0E8H
+            DB      0E1H,0D2H,0E4H,0E8H,0E1H,0E2H,0E4H,0E8H
+            DB      0D1H,0E2H,0D4H,0D8H,0B1H,0E2H,0B4H,0B8H
+            DB      071H,0E2H,074H,078H,0F1H,0E2H,0F4H,0F8H
+            DB      0F1H,0D2H,0F4H,0F8H,0F1H,0B2H,0F4H,0F8H
+            DB      0F1H,072H,0F4H,0F8H,0E1H,062H,0E4H,0E8H
+            DB      0E1H,0A2H,0E4H,0E8H,0E1H,0C2H,0E4H,0E8H
+            DB      0E1H,0C2H,0E4H,0E8H,0C1H,0E2H,0E4H,0E8H,0FFH
+OD_DATA11:  DB      07FH,0BFH,0DFH,0EFH,001H,002H,004H,008H
+            DB      0EFH,0DFH,0BFH,07FH,008H,004H,002H,001H,0FFH
+OD_DATA12:  DB      0F1H,092H,094H,0F8H,001H,062H,064H,008H
+            DB      0F1H,092H,094H,0F8H,091H,062H,064H,098H
+            DB      061H,0F2H,0F4H,068H,0FFH,000H,000H,000H
+
+;===============
+; End of Listing
+;===============
+
