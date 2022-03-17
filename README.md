@@ -8,3 +8,5 @@ To get my MicroComp to do something 'useful' I have added some circuity to drive
 the 4K EPROM is addressed as two 2K pages via a selector switch, this allowed me to include
 both my new clock code and a number of programs orginally published with the design
 
+The inspiration and PCB together with key parts came from Brian Chiha https://github.com/bchiha/microcomp
+
